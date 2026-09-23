@@ -1,7 +1,5 @@
 import os
 import json
-import hmac
-import hashlib
 import httpx
 from datetime import datetime
 from fastapi import FastAPI, Request, Response
@@ -10,73 +8,184 @@ from supabase import create_client
 app = FastAPI()
 
 # ─── Configurações ────────────────────────────────────────────────
-WHATSAPP_TOKEN        = os.environ["WHATSAPP_TOKEN"]          # Token da Meta
-WHATSAPP_PHONE_ID     = os.environ["WHATSAPP_PHONE_ID"]       # Phone Number ID da Meta
-VERIFY_TOKEN          = os.environ["VERIFY_TOKEN"]            # Token que você inventar para o webhook
-OPENAI_API_KEY        = os.environ["OPENAI_API_KEY"]          # Chave da OpenAI
-SUPABASE_URL          = os.environ["SUPABASE_URL"]
-SUPABASE_KEY          = os.environ["SUPABASE_KEY"]
-NTFY_TOPIC            = os.environ["NTFY_TOPIC"]              # Ex: "afrika-pedidos"
-NUMERO_FORNECEDORES   = os.environ["NUMERO_FORNECEDORES"]     # Ex: "5511999999999"
-APP_SECRET            = os.environ.get("APP_SECRET", "")      # App Secret da Meta (opcional mas recomendado)
+WHATSAPP_TOKEN      = os.environ["WHATSAPP_TOKEN"]
+WHATSAPP_PHONE_ID   = os.environ["WHATSAPP_PHONE_ID"]
+VERIFY_TOKEN        = os.environ["VERIFY_TOKEN"]
+OPENAI_API_KEY      = os.environ["OPENAI_API_KEY"]
+SUPABASE_URL        = os.environ["SUPABASE_URL"]
+SUPABASE_KEY        = os.environ["SUPABASE_KEY"]
+NTFY_TOPIC          = os.environ["NTFY_TOPIC"]
+NUMERO_FORNECEDORES = os.environ["NUMERO_FORNECEDORES"]
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ─── Cardápio ─────────────────────────────────────────────────────
-CARDAPIO_FIXO = """
-ACOMPANHAMENTOS (sempre disponíveis):
-- Arroz branco
-- Feijão carioca
-- Feijão preto
-- Macarrão alho e óleo
-- Purê de batata
-- Farofa
-- Salada verde (alface, tomate, pepino)
-- Salada de beterraba
-- Salada de cenoura
-
-BEBIDAS:
-- Suco de laranja (coado ou com polpa) - R$ 8,00
-- Suco de limão - R$ 7,00
-- Suco de maracujá - R$ 7,00
-- Refrigerante lata (Coca, Guaraná, Sprite) - R$ 6,00
-- Água mineral (com ou sem gás) - R$ 4,00
-
-SOBREMESAS:
-- Pudim - R$ 8,00
-- Mousse de maracujá - R$ 8,00
-- Arroz doce - R$ 6,00
-
-PRATO EXECUTIVO inclui: prato principal + 2 acompanhamentos à escolha + salada
-Preço do executivo: R$ 35,00 (*** SUBSTITUIR PELO VALOR REAL ***)
-"""
-
-# Prato da semana — atualizar toda semana via variável de ambiente ou banco
-PRATO_DA_SEMANA = os.environ.get("PRATO_DA_SEMANA", "Frango ao Creme de Milho")
-
 # ─── Tabela de entrega ────────────────────────────────────────────
 TABELA_ENTREGA = """
-Taxas de entrega (*** SUBSTITUIR PELOS VALORES REAIS ***):
-- Até 2 km: R$ 5,00
-- De 2 a 4 km: R$ 8,00
-- De 4 a 6 km: R$ 12,00
-- Acima de 6 km: não realizamos entrega
+Taxas de entrega:
+- Até 3 km: R$ 12,99
+- De 3 a 4 km: R$ 14,99
+- De 4 a 5 km: R$ 15,99
+- De 5 a 6 km: R$ 17,99
+- De 6 a 7 km: R$ 25,99
+- Acima de 7 km: não realizamos entrega
 
-Pagamento na entrega: dinheiro, Pix ou maquininha (crédito/débito).
+Formas de pagamento na entrega: dinheiro, Pix ou maquininha do entregador (crédito/débito).
 ATENÇÃO: vouchers (Alelo, Ticket, VR, Sodexo) NÃO são aceitos no delivery.
-O entregador usa a maquininha do iFood.
 """
 
+# ─── Cardápio fixo ────────────────────────────────────────────────
+CARDAPIO_FIXO = """
+=== REFEIÇÕES (Pratos) ===
+Todos acompanham arroz, feijão (exceto sábado), salada e opção de acompanhamento.
+OBS: Aos SÁBADOS não servimos feijão nem porção de feijão.
+
+CARNES:
+- Bife à Milanesa — R$ 46,90
+- Bife à Milanesa com Espaguete — R$ 51,90
+- Parmegiana de Carne — R$ 52,90
+- Parmegiana de Carne com Espaguete — R$ 52,90
+- Bife Grelhado Acebolado — R$ 47,90
+- Strogonoff de Carne — R$ 45,90
+- Picadinho de Carne Acebolado — R$ 44,90
+
+FRANGO:
+- Frango à Milanesa — R$ 41,90
+- Frango à Milanesa com Espaguete — R$ 46,90
+- Frango à Parmegiana — R$ 47,90
+- Frango à Parmegiana com Espaguete — R$ 47,90
+- Frango Grelhado Acebolado — R$ 42,90
+- Frango ao Maracujá — R$ 46,90
+- Frango ao Molho de Limão e Gengibre — R$ 44,90
+- Strogonoff de Frango — R$ 45,90
+
+BERINGELA:
+- Beringela à Milanesa — R$ 41,90
+- Beringela à Milanesa com Espaguete — R$ 45,90
+- Beringela à Parmegiana — R$ 47,90
+- Beringela à Parmegiana com Espaguete — R$ 47,90
+
+TILÁPIAS:
+- Tilápia à Milanesa — R$ 47,90
+- Tilápia à Milanesa com Espaguete — R$ 52,90
+- Tilápia à Parmegiana — R$ 52,90
+- Tilápia à Parmegiana com Espaguete — R$ 52,90
+- Tilápia Grelhada — R$ 47,90
+- Tilápia ao Maracujá — R$ 51,90
+- Tilápia ao Molho de Limão e Gengibre — R$ 51,90
+
+MASSAS E RISOTOS:
+- Espaguete ao Sugo — R$ 38,90
+- Espaguete na Manteiga e Sálvia — R$ 32,90
+- Fettuccine ao Brócoli e Cogumelo — R$ 57,90
+- Fettuccine ao Brócoli e Tirinhas de Carne — R$ 57,90
+- Fettuccine ao Brócoli e Tirinhas de Frango — R$ 57,90
+- Risoto de Limão Siciliano com Beringela à Milanesa — R$ 54,90
+- Risoto de Limão Siciliano com Tilápia Grelhada — R$ 57,90
+- Risoto de Limão Siciliano com Bife de Coração de Alcatra — R$ 64,90
+
+OUTROS:
+- Omelete com Arroz, Feijão e Salada — R$ 38,90 (sem feijão aos sábados)
+- Feijoada — R$ 49,90 (disponível apenas às QUARTAS e SÁBADOS)
+- Feijoada Quente sem Acompanhamentos — R$ 42,90 (quartas e sábados)
+
+=== PORÇÕES ===
+- Arroz (porção) — R$ 5,50
+- Feijão (porção) — R$ 5,50 (não disponível aos sábados)
+- Batata Frita Grande — R$ 18,00
+- Batata Frita Pequena — R$ 9,00
+- Farofa — R$ 5,50
+- Salada Fresca do Dia — R$ 7,90
+- Salada Primavera 270g — R$ 35,90
+- Porção Creme de Milho — R$ 9,00
+- Amendoa Laminada — R$ 3,50
+- Queijo Parmesão — R$ 3,50
+- Legumes (Cenoura e Abobrinha) — R$ 5,50
+- Molho ao Sugo — R$ 7,50
+- Ovo Frito — R$ 5,50
+- Porção Extra de Couve — R$ 5,50
+
+=== SUCOS (R$ 14,00 cada) ===
+- Suco de Laranja
+- Suco de Abacaxi
+- Suco de Abacaxi com Hortelã
+- Suco de Morango
+- Limonada Suíça
+- Limonada Suíça Adoçada
+- Suco de Melancia
+- Suco Frutas Vermelhas
+- Suco Refrescante
+- Suco Hidratante
+- Suco Rejuvenecedor
+- Suco Antigripal
+- Suco Anticolesterol
+- Suco Diurético
+- Suco Anti-oxidante
+
+Sucos especiais: R$ 16,00 / R$ 18,00
+- Suco de Maracujá — R$ 16,00
+- Suco Especial — R$ 18,00
+- Vitamina (Suco com Leite) — R$ 18,00
+
+=== REFRIGERANTES ===
+Lata 350ml: R$ 6,90 (Coca-Cola, Coca Zero, Guaraná Antártica, Sprite, Sprite Zero, Schwepps Citrus, H2OH, Soda Limonada Antarctica, etc.)
+- Coca-Cola 600ml — R$ 9,90
+- Coca-Cola Zero 600ml — R$ 9,90
+- H2OH Limão 500ml — R$ 9,90
+- Coca-Cola Mini 220ml lata — R$ 4,40
+- Gatorade 500ml — R$ 11,90
+- Suco de Uva Garrafa — R$ 33,80
+- Água 510ml — R$ 5,00
+- Água com Gás — R$ 5,50
+- Água de Coco 200ml — R$ 5,50
+- Água Tônica Lata 350ml — R$ 6,90
+- Limão Espremido — R$ 2,00
+
+=== SORVETES / SOBREMESAS ===
+- Picolé Chambinho — R$ 8,50
+- Picolé Garoto Bombom — R$ 9,99
+- Picolé Garoto Batom — R$ 5,90
+- Picolé Garoto Crocante — R$ 15,90
+- Picolé Choco Trio — R$ 9,99
+- Picolé La Frutta Limão — R$ 7,50
+- Picolé Mega Clássico — R$ 17,90
+- Picolé Mega Pistache — R$ 18,90
+- Picolé KitKat Chocolate — R$ 18,90
+- Picolé Laka Oreo — R$ 18,90
+- Picolé Lacta Diamante Negro — R$ 18,90
+- Picolé Mega Trufa Branco — R$ 18,90
+- Picolé Mega Amendoas — R$ 18,90
+- Oreo Bits — R$ 21,00
+- Chokito Bites — R$ 15,00
+- Fini Dentadura — R$ 8,50
+- Fini Tubes Morango — R$ 5,90
+"""
+
+# ─── Buscar prato da semana no Supabase ──────────────────────────
+async def buscar_prato_semana() -> str:
+    try:
+        hoje = datetime.now().date()
+        res = supabase.table("cardapio_semana").select("*").lte("data_inicio", str(hoje)).gte("data_fim", str(hoje)).execute()
+        if res.data:
+            pratos = [f"- {p['nome']} — R$ {p['preco']:.2f}" for p in res.data]
+            return "PRATO(S) DA SEMANA:\n" + "\n".join(pratos)
+    except Exception as e:
+        print(f"Erro ao buscar prato da semana: {e}")
+    return "PRATO DA SEMANA: Consulte com a equipe pelo número (11) 2427-3528"
+
 # ─── Horário de funcionamento ─────────────────────────────────────
-HORARIO = "Segunda a Sábado, das 11h00 às 15h15."
+HORARIO = "Segunda a Sábado, das 11h às 15h15."
 
 # ─── System prompt da Zara ────────────────────────────────────────
-def montar_system_prompt(nome_cliente: str) -> str:
+def montar_system_prompt(nome_cliente: str, prato_semana: str) -> str:
     agora = datetime.now()
     hora_atual = agora.strftime("%H:%M")
-    dia_semana = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"][agora.weekday()]
+    dia_semana_num = agora.weekday()  # 0=segunda, 5=sábado, 6=domingo
+    dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+    dia_semana = dias[dia_semana_num]
+    eh_sabado = dia_semana_num == 5
+    eh_quarta = dia_semana_num == 2
     dentro_horario = (
-        agora.weekday() < 6 and
+        dia_semana_num < 6 and
         agora.hour >= 11 and
         (agora.hour < 15 or (agora.hour == 15 and agora.minute <= 15))
     )
@@ -89,53 +198,62 @@ def montar_system_prompt(nome_cliente: str) -> str:
              f"({HORARIO}) e registre normalmente."
     )
 
+    aviso_feijao = ""
+    if eh_sabado:
+        aviso_feijao = "\n⚠️ HOJE É SÁBADO: Não servimos feijão nem porção de feijão. Não ofereça esses itens."
+
+    aviso_feijoada = ""
+    if not (eh_quarta or eh_sabado):
+        aviso_feijoada = "\n⚠️ FEIJOADA: Hoje NÃO temos feijoada. Disponível apenas às quartas e sábados."
+
     return f"""Você é Zara, atendente do Afrika Restaurante em Atibaia-SP.
 Seu atendimento deve ser caloroso, natural e parecer humano — use linguagem descontraída,
 pode usar "tá", "ótimo", "perfeito", emojis com moderação. Nunca diga que é um robô ou IA.
+Se alguém perguntar diretamente se você é humano ou IA, diga que é a atendente digital do Afrika.
 
 CLIENTE: {nome_cliente if nome_cliente else "cliente"}
 HOJE: {dia_semana}, {hora_atual}
-STATUS DA COZINHA: {status_cozinha}
+STATUS: {status_cozinha}{aviso_feijao}{aviso_feijoada}
 
 === CARDÁPIO ===
-PRATO PRINCIPAL DA SEMANA: {PRATO_DA_SEMANA}
+{prato_semana}
+
 {CARDAPIO_FIXO}
 
 === ENTREGA ===
 {TABELA_ENTREGA}
 
 === REGRAS IMPORTANTES ===
-1. Quando o cliente entrar em contato, cumprimente e apresente as 3 opções:
-   a) Pedir pelo MenuDino: https://menudino.com/afrika (*** SUBSTITUIR PELO LINK REAL ***)
-   b) Pedir aqui pelo WhatsApp (você anota e repassa para a equipe)
-   c) Ligar: (11) 2427-3528
+1. Quando o cliente entrar em contato pela primeira vez, cumprimente e apresente as opções:
+   - Pedir pelo MenuDino (site/app): afrikacafe.com.br
+   - Pedir aqui pelo WhatsApp (você anota e repassa para a equipe)
+   - Ligar: (11) 2427-3528
 
 2. Se o cliente escolher pedir pelo WhatsApp, colete:
-   - Tipo de pedido: DELIVERY, RETIRADA ou SALÃO (adiantado)
+   - Tipo: DELIVERY, RETIRADA ou SALÃO (adiantado para comer no local)
    - Para DELIVERY: endereço completo, forma de pagamento (lembrar que voucher não é aceito)
    - Para RETIRADA: horário que vai buscar
    - Para SALÃO: horário de chegada e nome para a mesa
-   - Itens do pedido com todas as personalizações (molho à parte, sem cebola, etc.)
+   - Itens com todas as personalizações (molho à parte, sem cebola, suco coado, etc.)
    - Sempre confirme o pedido completo antes de finalizar
 
-3. Se identificar que a pessoa é fornecedor ou fala sobre entregas de mercadoria,
-   redirecione gentilmente: "Para assuntos com nosso setor de compras, o contato é {NUMERO_FORNECEDORES} 😊"
+3. Se perceber que é fornecedor ou assunto comercial:
+   "Para assuntos com nosso setor de compras, o contato é {NUMERO_FORNECEDORES} 😊"
 
-4. Se o cliente pedir atendimento humano, diga:
-   "Claro! Você pode ligar aqui mesmo pelo WhatsApp ou no (11) 2427-3528 que alguém te atende 😊"
+4. Se o cliente pedir atendimento humano:
+   "Claro! Pode ligar aqui mesmo pelo WhatsApp ou no (11) 2427-3528 que alguém te atende 😊"
 
-5. Registre TODAS as personalizações de pedido (molho à parte, suco coado, sem cebola, etc.)
+5. Registre TODAS as personalizações (molho à parte, suco coado, sem cebola, etc.)
 
-6. Seja natural — um pequeno delay de resposta é normal, não precisa ser instantânea.
+6. Ao finalizar um pedido, diga algo como "Pedido anotado! Vou repassar para a equipe agora 😊"
 """
 
 # ─── Histórico de conversas (em memória) ─────────────────────────
 conversas: dict[str, list] = {}
 
-# ─── Buscar/criar cliente no Supabase ────────────────────────────
+# ─── Buscar cliente no Supabase ──────────────────────────────────
 def buscar_cliente(telefone: str) -> dict | None:
     try:
-        # Remove o código do país para buscar no Consumer (que salva só com DDD)
         numero_limpo = telefone.replace("55", "", 1) if telefone.startswith("55") else telefone
         res = supabase.table("clientes").select("*").eq("celular", numero_limpo).execute()
         if res.data:
@@ -144,12 +262,12 @@ def buscar_cliente(telefone: str) -> dict | None:
         print(f"Erro ao buscar cliente: {e}")
     return None
 
-def salvar_pedido(telefone: str, nome_cliente: str, pedido: dict):
+def salvar_pedido(telefone: str, nome_cliente: str, historico: str):
     try:
         supabase.table("pedidos_whatsapp").insert({
             "telefone": telefone,
             "nome_cliente": nome_cliente,
-            "pedido": json.dumps(pedido, ensure_ascii=False),
+            "pedido": historico,
             "criado_em": datetime.now().isoformat(),
             "status": "aguardando"
         }).execute()
@@ -192,22 +310,22 @@ async def enviar_mensagem(telefone: str, texto: str):
 
 # ─── Chamar ChatGPT ───────────────────────────────────────────────
 async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str) -> str:
+    prato_semana = await buscar_prato_semana()
+
     if telefone not in conversas:
         conversas[telefone] = []
 
     conversas[telefone].append({"role": "user", "content": mensagem_usuario})
-
-    # Limita histórico a 20 mensagens para economizar tokens
     historico = conversas[telefone][-20:]
 
     payload = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": montar_system_prompt(nome_cliente)},
+            {"role": "system", "content": montar_system_prompt(nome_cliente, prato_semana)},
             *historico
         ],
         "temperature": 0.7,
-        "max_tokens": 500
+        "max_tokens": 600
     }
 
     async with httpx.AsyncClient() as client:
@@ -222,18 +340,18 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
 
     conversas[telefone].append({"role": "assistant", "content": resposta})
 
-    # Verifica se a resposta indica que um pedido foi finalizado
-    palavras_pedido = ["pedido anotado", "pedido registrado", "vou repassar", "anotei seu pedido"]
+    # Detecta pedido finalizado
+    palavras_pedido = ["pedido anotado", "vou repassar", "repassar para a equipe", "anotei seu pedido"]
     if any(p in resposta.lower() for p in palavras_pedido):
         historico_texto = "\n".join([
             f"{'Cliente' if m['role'] == 'user' else 'Zara'}: {m['content']}"
-            for m in conversas[telefone][-10:]
+            for m in conversas[telefone][-12:]
         ])
         await notificar_equipe(
-            f"Cliente: {nome_cliente}\nTelefone: {telefone}\n\n{historico_texto}",
-            titulo=f"🍽️ Pedido de {nome_cliente}"
+            f"Cliente: {nome_cliente or 'Não identificado'}\nTelefone: {telefone}\n\n{historico_texto}",
+            titulo=f"🍽️ Pedido de {nome_cliente or telefone}"
         )
-        salvar_pedido(telefone, nome_cliente, {"historico": historico_texto})
+        salvar_pedido(telefone, nome_cliente or "", historico_texto)
 
     return resposta
 
@@ -244,7 +362,6 @@ async def verificar_webhook(request: Request):
     mode      = params.get("hub.mode")
     token     = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
-
     if mode == "subscribe" and token == VERIFY_TOKEN:
         return Response(content=challenge, media_type="text/plain")
     return Response(status_code=403)
@@ -253,13 +370,11 @@ async def verificar_webhook(request: Request):
 @app.post("/webhook")
 async def receber_mensagem(request: Request):
     body = await request.json()
-
     try:
-        entry    = body["entry"][0]
-        changes  = entry["changes"][0]
-        value    = changes["value"]
+        entry   = body["entry"][0]
+        changes = entry["changes"][0]
+        value   = changes["value"]
 
-        # Ignora status de entrega (delivered, read, etc.)
         if "statuses" in value:
             return {"status": "ok"}
 
@@ -271,25 +386,18 @@ async def receber_mensagem(request: Request):
         telefone = msg["from"]
         tipo     = msg.get("type", "")
 
-        # Só processa texto por enquanto
         if tipo != "text":
             await enviar_mensagem(
                 telefone,
-                "Olá! Por enquanto só consigo ler mensagens de texto. "
-                "Pode me escrever o que precisa? 😊"
+                "Olá! Por enquanto só consigo ler mensagens de texto. Pode me escrever o que precisa? 😊"
             )
             return {"status": "ok"}
 
         texto_recebido = msg["text"]["body"]
-
-        # Busca nome do cliente no Supabase
         cliente = buscar_cliente(telefone)
         nome_cliente = cliente["nome"] if cliente else ""
 
-        # Chama a Zara (ChatGPT)
         resposta = await chamar_chatgpt(telefone, texto_recebido, nome_cliente)
-
-        # Envia resposta
         await enviar_mensagem(telefone, resposta)
 
     except Exception as e:
@@ -300,5 +408,4 @@ async def receber_mensagem(request: Request):
 # ─── Health check ─────────────────────────────────────────────────
 @app.get("/")
 async def health():
-    return {"status": "Zara online 🌍"}
-
+    return {"status": "Zara online 🌍", "hora": datetime.now().strftime("%H:%M")}
