@@ -4,6 +4,7 @@ import httpx
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse
 from supabase import create_client
 
 app = FastAPI()
@@ -422,3 +423,51 @@ async def receber_mensagem(request: Request):
 @app.get("/")
 async def health():
     return {"status": "Zara online 🌍", "hora": datetime.now(TZ).strftime("%H:%M")}
+
+# ─── Política de privacidade (exigida pela Meta) ─────────────────
+POLITICA_PRIVACIDADE = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Política de Privacidade — Afrika Restaurante</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; line-height: 1.6; color: #222; }
+  h1 { font-size: 1.6em; } h2 { font-size: 1.15em; margin-top: 1.6em; }
+</style>
+</head>
+<body>
+<h1>Política de Privacidade — Afrika Restaurante</h1>
+<p>Esta política explica como o Afrika Restaurante (Rua José Bim, 122, Centro, Atibaia-SP) trata os dados
+de quem conversa com nosso atendimento pelo WhatsApp, em conformidade com a Lei Geral de Proteção de Dados (Lei nº 13.709/2018).</p>
+
+<h2>1. Dados que coletamos</h2>
+<p>Número de telefone do WhatsApp, nome (quando informado ou já cadastrado), conteúdo das mensagens trocadas
+e informações do pedido, como itens, endereço de entrega, horário e forma de pagamento.</p>
+
+<h2>2. Para que usamos</h2>
+<p>Exclusivamente para responder suas dúvidas, registrar e preparar seus pedidos, realizar entregas
+e melhorar nosso atendimento. Não enviamos propaganda sem sua autorização.</p>
+
+<h2>3. Com quem compartilhamos</h2>
+<p>Os dados são processados por serviços necessários ao funcionamento do atendimento: Meta (WhatsApp),
+OpenAI (geração das respostas do atendimento digital), Supabase (armazenamento dos pedidos) e o serviço
+de entrega quando o pedido é delivery. Não vendemos nem cedemos seus dados a terceiros para outros fins.</p>
+
+<h2>4. Por quanto tempo guardamos</h2>
+<p>Pelo tempo necessário para atender o pedido e cumprir obrigações legais e fiscais.</p>
+
+<h2>5. Seus direitos</h2>
+<p>Você pode pedir a qualquer momento acesso, correção ou exclusão dos seus dados, ou deixar de receber
+mensagens, entrando em contato pelo telefone ou WhatsApp (11) 2427-3528.</p>
+
+<h2>6. Alterações</h2>
+<p>Esta política pode ser atualizada. A versão vigente estará sempre disponível neste endereço.</p>
+
+<p><em>Última atualização: setembro de 2026.</em></p>
+</body>
+</html>"""
+
+@app.get("/privacidade", response_class=HTMLResponse)
+async def privacidade():
+    return POLITICA_PRIVACIDADE
