@@ -1,5 +1,6 @@
-fastapi==0.111.0
-uvicorn==0.29.0
-httpx==0.25.2
-supabase==2.3.4
-python-dotenv==1.0.1
+flask
+gunicorn
+requests
+openai>=1.40
+supabase>=2.10
+python-dotenv
