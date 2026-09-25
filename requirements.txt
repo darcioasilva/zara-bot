@@ -1,6 +1,6 @@
-flask
-gunicorn
 requests
 openai>=1.40
 supabase>=2.10
 python-dotenv
+uvicorn[standard]
+fastapi
