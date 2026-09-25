@@ -277,7 +277,35 @@ async def calcular_taxa_entrega(endereco: str) -> dict:
         print(f"Erro ao calcular taxa: {e}")
         return {"ok": False, "motivo": "erro no cálculo; a equipe confirma a taxa"}
 
-FERRAMENTAS = [{
+FERRAMENTA_PEDIDO = {
+    "type": "function",
+    "function": {
+        "name": "registrar_pedido",
+        "description": "Registra o pedido e avisa a cozinha. OBRIGATÓRIO chamar assim que o cliente confirmar "
+                       "o pedido (ex.: 'sim', 'pode ser', 'ok', 'confirmo'). Sem esta chamada o pedido NÃO chega "
+                       "à equipe. Chame uma única vez por pedido.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "tipo": {"type": "string", "enum": ["SALÃO", "RETIRADA", "DELIVERY"]},
+                "horario": {"type": "string", "description": "horário combinado ou 'o quanto antes'"},
+                "nome": {"type": "string"},
+                "itens": {"type": "array", "items": {"type": "string"},
+                          "description": "um por linha: '1x Nome do Prato (personalizações) — R$ 00,00'"},
+                "total_itens": {"type": "string", "description": "R$ 00,00"},
+                "taxa_entrega": {"type": "string", "description": "valor calculado, 'a confirmar' ou '-'"},
+                "distancia": {"type": "string", "description": "km ou '-'"},
+                "total_com_entrega": {"type": "string", "description": "R$ 00,00 ou '-'"},
+                "pagamento": {"type": "string"},
+                "endereco": {"type": "string", "description": "só delivery; senão '-'"},
+                "obs": {"type": "string"},
+            },
+            "required": ["tipo", "horario", "nome", "itens", "total_itens", "pagamento"],
+        },
+    },
+}
+
+FERRAMENTAS = [FERRAMENTA_PEDIDO, {
     "type": "function",
     "function": {
         "name": "calcular_taxa_entrega",
@@ -428,24 +456,12 @@ STATUS: {status_cozinha}{aviso_feijao}{aviso_feijoada}{aviso_esgotados}
 5. Se o cliente pedir atendimento humano:
    "Claro! Pode ligar aqui mesmo pelo WhatsApp ou no (11) 2427-3528 que alguém te atende 😊"
 
-6. SOMENTE quando o cliente confirmar o pedido, responda com "Pedido anotado! Vou repassar para
-   a equipe agora 😊" e, NO FINAL da mesma mensagem, inclua EXATAMENTE este bloco (o cliente não
-   verá esse bloco, ele vai só para a cozinha):
-
-[RESUMO]
-TIPO: SALÃO ou RETIRADA ou DELIVERY
-HORARIO: horário combinado (ou "o quanto antes")
-NOME: nome do cliente
-ITENS:
-1x Nome do Prato (personalizações) — R$ 00,00
-TOTAL ITENS: R$ 00,00
-TAXA ENTREGA: valor calculado, ou "a confirmar" se não foi possível calcular (só para delivery; senão "-")
-DISTANCIA: km calculados (só para delivery; senão "-")
-TOTAL COM ENTREGA: R$ 00,00 (só para delivery com taxa calculada; senão "-")
-PAGAMENTO: forma de pagamento (ou "no local")
-ENDERECO: endereço completo (só para delivery; senão "-")
-OBS: observações extras (ou "-")
-[/RESUMO]
+6. REGISTRO DO PEDIDO (MUITO IMPORTANTE): assim que o cliente CONFIRMAR o pedido, chame a
+   ferramenta registrar_pedido com todos os dados. Sem essa chamada o pedido NÃO chega à cozinha.
+   Depois de registrar, responda "Pedido anotado! Já repassei para a equipe 😊".
+   Nunca diga que o pedido foi anotado/repassado sem ter chamado registrar_pedido.
+   Nunca prometa tempo de preparo (ex.: "pronto em 5 minutos"); para SALÃO e RETIRADA, pergunte o
+   horário e diga que o prato fica pronto nesse horário.
 
 7. FOTOS: você pode enviar foto de um prato colocando no FINAL da mensagem a marcação
    [FOTO: código] usando os códigos da lista abaixo (ex.: [FOTO: 160]). O cliente não vê a
@@ -460,8 +476,6 @@ OBS: observações extras (ou "-")
    LISTA DE FOTOS DISPONÍVEIS (código = prato):
 {LISTA_FOTOS}
 
-8. Sobre o bloco [RESUMO]: sempre feche o bloco com [/RESUMO]. Nunca escreva nada depois de [/RESUMO]. Nunca inclua o
-   bloco antes de o cliente confirmar, e nunca o inclua duas vezes para o mesmo pedido.
 """
 
 # ─── Histórico de conversas (em memória) ─────────────────────────
@@ -603,6 +617,7 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
 
     payload["tools"] = FERRAMENTAS
     notas_taxa = []
+    resumo = None
     async with httpx.AsyncClient() as client:
         for _ in range(3):  # no máximo 3 rodadas de ferramenta
             r = await client.post(
@@ -623,9 +638,27 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
                     args = json.loads(ch["function"]["arguments"] or "{}")
                 except Exception:
                     args = {}
-                resultado = await calcular_taxa_entrega(args.get("endereco", ""))
-                print(f"Taxa calculada para {args.get('endereco')}: {resultado}")
-                notas_taxa.append(resultado)
+                if ch["function"]["name"] == "registrar_pedido":
+                    linhas = [
+                        f"TIPO: {args.get('tipo', '-')}",
+                        f"HORARIO: {args.get('horario', '-')}",
+                        f"NOME: {args.get('nome') or nome_cliente or '-'}",
+                        "ITENS:", *[str(x) for x in (args.get("itens") or [])],
+                        f"TOTAL ITENS: {args.get('total_itens', '-')}",
+                    ]
+                    if args.get("tipo") == "DELIVERY":
+                        linhas += [f"TAXA ENTREGA: {args.get('taxa_entrega', 'a confirmar')}",
+                                   f"DISTANCIA: {args.get('distancia', '-')}",
+                                   f"TOTAL COM ENTREGA: {args.get('total_com_entrega', '-')}",
+                                   f"ENDERECO: {args.get('endereco', '-')}"]
+                    linhas += [f"PAGAMENTO: {args.get('pagamento', '-')}", f"OBS: {args.get('obs') or '-'}"]
+                    resumo = "\n".join(linhas)
+                    resultado = {"ok": True, "mensagem": "pedido registrado e enviado para a cozinha"}
+                    notas_taxa.append({"pedido_registrado": True})
+                else:
+                    resultado = await calcular_taxa_entrega(args.get("endereco", ""))
+                    print(f"Taxa calculada para {args.get('endereco')}: {resultado}")
+                    notas_taxa.append(resultado)
                 payload["messages"].append({"role": "tool", "tool_call_id": ch["id"],
                                             "content": json.dumps(resultado, ensure_ascii=False)})
         else:
@@ -634,9 +667,8 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
                                   headers={"Authorization": f"Bearer {OPENAI_API_KEY}"}, timeout=30)
             resposta = r.json()["choices"][0]["message"].get("content") or ""
 
-    # Detecta pedido finalizado pelo bloco [RESUMO]...[/RESUMO]
-    resumo = None
-    if "[RESUMO]" in resposta:
+    # Fallback: pedido no bloco [RESUMO]...[/RESUMO] (formato antigo)
+    if "[RESUMO]" in resposta and not resumo:
         inicio = resposta.index("[RESUMO]")
         fim = resposta.find("[/RESUMO]", inicio)
         if fim != -1:
