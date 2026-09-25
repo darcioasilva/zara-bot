@@ -244,9 +244,10 @@ STATUS: {status_cozinha}{aviso_feijao}{aviso_feijoada}
    - Itens com todas as personalizações (molho à parte, sem cebola, sem salada, suco coado, etc.)
 
 3. Antes de finalizar, SEMPRE confirme com o cliente o pedido completo com o preço de cada item
-   e o TOTAL (use os preços do cardápio). Para delivery, informe que a taxa de entrega depende da
-   distância (tabela acima) e será confirmada pela equipe, a menos que o cliente informe o bairro
-   e a distância seja clara.
+   e o TOTAL DOS ITENS (use os preços do cardápio). Para DELIVERY: NUNCA calcule nem chute a taxa
+   de entrega, porque você não sabe a distância. Diga que a taxa (entre R$ 12,99 e R$ 25,99,
+   conforme a distância) será confirmada pela equipe em seguida. Peça o bairro e um ponto de
+   referência, nunca pergunte "de onde você está ligando".
 
 4. Se perceber que é fornecedor ou assunto comercial:
    "Para assuntos com nosso setor de compras, o contato é {NUMERO_FORNECEDORES} 😊"
@@ -264,14 +265,15 @@ HORARIO: horário combinado (ou "o quanto antes")
 NOME: nome do cliente
 ITENS:
 1x Nome do Prato (personalizações) — R$ 00,00
-TOTAL: R$ 00,00
+TOTAL ITENS: R$ 00,00
+TAXA ENTREGA: a confirmar (só para delivery; senão "-")
 PAGAMENTO: forma de pagamento (ou "no local")
 ENDERECO: endereço completo (só para delivery; senão "-")
 OBS: observações extras (ou "-")
 [/RESUMO]
 
-   Nunca inclua o bloco [RESUMO] antes de o cliente confirmar, e nunca o inclua duas vezes
-   para o mesmo pedido.
+   Sempre feche o bloco com [/RESUMO]. Nunca escreva nada depois de [/RESUMO]. Nunca inclua o
+   bloco antes de o cliente confirmar, e nunca o inclua duas vezes para o mesmo pedido.
 """
 
 # ─── Histórico de conversas (em memória) ─────────────────────────
@@ -378,9 +380,16 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
     if "[RESUMO]" in resposta:
         inicio = resposta.index("[RESUMO]")
         fim = resposta.find("[/RESUMO]", inicio)
-        bloco = resposta[inicio + len("[RESUMO]"): fim if fim != -1 else len(resposta)]
-        resumo = bloco.strip()
-        resposta = (resposta[:inicio] + (resposta[fim + len("[/RESUMO]"):] if fim != -1 else "")).strip()
+        if fim != -1:
+            resumo = resposta[inicio + len("[RESUMO]"):fim].strip()
+            depois = resposta[fim + len("[/RESUMO]"):]
+        else:
+            # Sem [/RESUMO]: o resumo termina na linha "OBS:"
+            linhas = resposta[inicio + len("[RESUMO]"):].strip().splitlines()
+            corte = next((i for i, l in enumerate(linhas) if l.strip().upper().startswith("OBS")), len(linhas) - 1)
+            resumo = "\n".join(linhas[:corte + 1]).strip()
+            depois = "\n".join(linhas[corte + 1:])
+        resposta = (resposta[:inicio].strip() + "\n\n" + depois.strip()).strip()
 
     conversas[telefone].append({"role": "assistant", "content": resposta + ("\n(pedido registrado)" if resumo else "")})
 
