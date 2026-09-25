@@ -326,6 +326,19 @@ OBS: observações extras (ou "-")
 # ─── Histórico de conversas (em memória) ─────────────────────────
 conversas: dict[str, list] = {}
 FOTOS_PENDENTES: dict[str, list] = {}
+ULTIMA_MSG: dict[str, datetime] = {}
+HORAS_NOVA_CONVERSA = 6
+
+def fotos_do_dia() -> list[str]:
+    """Códigos das fotos dos pratos especiais válidos hoje (máx. 2)."""
+    try:
+        hoje = str(datetime.now(TZ).date())
+        res = (supabase.table("cardapio_semana").select("foto_codigo,tipo")
+               .lte("data_inicio", hoje).gte("data_fim", hoje).order("tipo").execute())
+        return [p["foto_codigo"] for p in (res.data or []) if p.get("foto_codigo") in FOTOS][:2]
+    except Exception as e:
+        print(f"Erro ao buscar fotos do dia: {e}")
+        return []
 
 # ─── Buscar cliente no Supabase ──────────────────────────────────
 def buscar_cliente(telefone: str) -> dict | None:
@@ -542,9 +555,25 @@ async def receber_mensagem(request: Request):
         cliente = buscar_cliente(telefone)
         nome_cliente = cliente["nome"] if cliente else ""
 
+        # Nova conversa? (primeira mensagem ou mais de 6h sem falar)
+        agora = datetime.now(TZ)
+        ultima = ULTIMA_MSG.get(telefone)
+        nova_conversa = ultima is None or (agora - ultima).total_seconds() > HORAS_NOVA_CONVERSA * 3600
+        ULTIMA_MSG[telefone] = agora
+        if nova_conversa:
+            conversas.pop(telefone, None)
+
         resposta = await chamar_chatgpt(telefone, texto_recebido, nome_cliente)
         await enviar_mensagem(telefone, resposta)
-        for codigo in FOTOS_PENDENTES.pop(telefone, []):
+
+        fotos = FOTOS_PENDENTES.pop(telefone, [])
+        if nova_conversa:
+            extras = [c for c in fotos_do_dia() if c not in fotos]
+            fotos = (fotos + extras)[:2]
+            if extras and telefone in conversas:
+                conversas[telefone].append({"role": "assistant", "content":
+                    "".join(f"(foto enviada: {FOTOS[c]})" for c in extras)})
+        for codigo in fotos:
             await enviar_foto(telefone, codigo)
 
     except Exception as e:
