@@ -215,6 +215,82 @@ async def buscar_prato_semana() -> str:
         print(f"Erro ao buscar prato da semana: {e}")
     return "PRATO DA SEMANA: Consulte com a equipe pelo número (11) 2427-3528"
 
+# ─── Distância e taxa de entrega (Google Maps) ────────────────────
+GOOGLE_MAPS_KEY = os.environ.get("GOOGLE_MAPS_KEY", "")
+ENDERECO_RESTAURANTE = "Rua José Bim, 122, Centro, Atibaia - SP, Brasil"
+FAIXAS_TAXA = [(3, 12.99), (4, 14.99), (5, 15.99), (6, 17.99), (7, 25.99)]  # (até km, taxa)
+_cache_coord: dict[str, tuple] = {}
+
+async def geocodificar(endereco: str):
+    """Endereço -> (lat, lng, endereço formatado) ou None."""
+    if endereco in _cache_coord:
+        return _cache_coord[endereco]
+    texto = endereco if "atibaia" in endereco.lower() else f"{endereco}, Atibaia - SP"
+    async with httpx.AsyncClient() as client:
+        r = await client.get("https://maps.googleapis.com/maps/api/geocode/json",
+                             params={"address": texto, "key": GOOGLE_MAPS_KEY,
+                                     "region": "br", "language": "pt-BR", "components": "country:BR"},
+                             timeout=15)
+    dados = r.json()
+    if dados.get("status") != "OK" or not dados.get("results"):
+        print(f"Geocoding sem resultado ({dados.get('status')}): {texto} {dados.get('error_message', '')}")
+        return None
+    res = dados["results"][0]
+    # endereço vago demais (só cidade/bairro) não serve para calcular taxa
+    tipos = set(res.get("types", []))
+    if tipos & {"locality", "administrative_area_level_2", "administrative_area_level_1", "country"}:
+        return None
+    loc = res["geometry"]["location"]
+    valor = (loc["lat"], loc["lng"], res.get("formatted_address", texto))
+    _cache_coord[endereco] = valor
+    return valor
+
+async def calcular_taxa_entrega(endereco: str) -> dict:
+    """Calcula a distância de carro do restaurante até o endereço e a taxa pela tabela."""
+    if not GOOGLE_MAPS_KEY:
+        return {"ok": False, "motivo": "cálculo indisponível; a equipe confirma a taxa"}
+    try:
+        origem = await geocodificar(ENDERECO_RESTAURANTE)
+        destino = await geocodificar(endereco)
+        if not origem or not destino:
+            return {"ok": False, "motivo": "endereço não encontrado ou incompleto; peça rua, número e bairro"}
+        corpo = {
+            "origin": {"location": {"latLng": {"latitude": origem[0], "longitude": origem[1]}}},
+            "destination": {"location": {"latLng": {"latitude": destino[0], "longitude": destino[1]}}},
+            "travelMode": "DRIVE",
+        }
+        async with httpx.AsyncClient() as client:
+            r = await client.post("https://routes.googleapis.com/directions/v2:computeRoutes", json=corpo,
+                                  headers={"X-Goog-Api-Key": GOOGLE_MAPS_KEY,
+                                           "X-Goog-FieldMask": "routes.distanceMeters"}, timeout=15)
+        rotas = r.json().get("routes") or []
+        if not rotas:
+            print(f"Routes sem resultado: {r.text[:300]}")
+            return {"ok": False, "motivo": "não consegui calcular a rota; a equipe confirma a taxa"}
+        km = rotas[0]["distanceMeters"] / 1000
+        taxa = next((t for limite, t in FAIXAS_TAXA if km <= limite), None)
+        base = {"endereco_encontrado": destino[2], "distancia_km": round(km, 1)}
+        if taxa is None:
+            return {"ok": True, "entrega": False, **base, "mensagem": "acima de 7 km: não realizamos entrega"}
+        return {"ok": True, "entrega": True, **base, "taxa": f"R$ {taxa:.2f}".replace(".", ",")}
+    except Exception as e:
+        print(f"Erro ao calcular taxa: {e}")
+        return {"ok": False, "motivo": "erro no cálculo; a equipe confirma a taxa"}
+
+FERRAMENTAS = [{
+    "type": "function",
+    "function": {
+        "name": "calcular_taxa_entrega",
+        "description": "Calcula a distância de carro do Afrika até o endereço do cliente e a taxa de entrega. "
+                       "Use sempre que o cliente quiser DELIVERY e você tiver o endereço (rua, número e bairro).",
+        "parameters": {
+            "type": "object",
+            "properties": {"endereco": {"type": "string", "description": "Rua, número, bairro (e cidade, se não for Atibaia)"}},
+            "required": ["endereco"],
+        },
+    },
+}]
+
 # ─── Itens esgotados no dia ───────────────────────────────────────
 def listar_esgotados() -> list[str]:
     try:
@@ -337,10 +413,14 @@ STATUS: {status_cozinha}{aviso_feijao}{aviso_feijoada}{aviso_esgotados}
      não insista. No resumo, registre como "1x Batata Frita Pequena (com prato) — R$ 5,00".
 
 3. Antes de finalizar, SEMPRE confirme com o cliente o pedido completo com o preço de cada item
-   e o TOTAL DOS ITENS (use os preços do cardápio). Para DELIVERY: NUNCA calcule nem chute a taxa
-   de entrega, porque você não sabe a distância. Diga que a taxa (entre R$ 12,99 e R$ 25,99,
-   conforme a distância) será confirmada pela equipe em seguida. Peça o bairro e um ponto de
-   referência, nunca pergunte "de onde você está ligando".
+   e o TOTAL (use os preços do cardápio). Para DELIVERY: assim que tiver o endereço (rua, número e
+   bairro), use a ferramenta calcular_taxa_entrega. NUNCA calcule nem chute a taxa por conta própria.
+   - Se a ferramenta devolver a taxa: informe a taxa e o TOTAL COM ENTREGA (itens + taxa).
+   - Se devolver entrega=false (acima de 7 km): diga com gentileza que não entregamos nesse endereço
+     e ofereça retirada.
+   - Se der erro/endereço não encontrado: peça rua, número e bairro; se ainda assim falhar, diga que
+     a equipe confirma a taxa em seguida.
+   Nunca pergunte "de onde você está ligando".
 
 4. Se perceber que é fornecedor ou assunto comercial:
    "Para assuntos com nosso setor de compras, o contato é {NUMERO_FORNECEDORES} 😊"
@@ -359,7 +439,9 @@ NOME: nome do cliente
 ITENS:
 1x Nome do Prato (personalizações) — R$ 00,00
 TOTAL ITENS: R$ 00,00
-TAXA ENTREGA: a confirmar (só para delivery; senão "-")
+TAXA ENTREGA: valor calculado, ou "a confirmar" se não foi possível calcular (só para delivery; senão "-")
+DISTANCIA: km calculados (só para delivery; senão "-")
+TOTAL COM ENTREGA: R$ 00,00 (só para delivery com taxa calculada; senão "-")
 PAGAMENTO: forma de pagamento (ou "no local")
 ENDERECO: endereço completo (só para delivery; senão "-")
 OBS: observações extras (ou "-")
@@ -519,15 +601,38 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
         "max_tokens": 600
     }
 
+    payload["tools"] = FERRAMENTAS
+    notas_taxa = []
     async with httpx.AsyncClient() as client:
-        r = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            json=payload,
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            timeout=30
-        )
-        data = r.json()
-        resposta = data["choices"][0]["message"]["content"]
+        for _ in range(3):  # no máximo 3 rodadas de ferramenta
+            r = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                json=payload,
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+                timeout=30
+            )
+            data = r.json()
+            msg_ia = data["choices"][0]["message"]
+            chamadas = msg_ia.get("tool_calls") or []
+            if not chamadas:
+                resposta = msg_ia.get("content") or ""
+                break
+            payload["messages"].append(msg_ia)
+            for ch in chamadas:
+                try:
+                    args = json.loads(ch["function"]["arguments"] or "{}")
+                except Exception:
+                    args = {}
+                resultado = await calcular_taxa_entrega(args.get("endereco", ""))
+                print(f"Taxa calculada para {args.get('endereco')}: {resultado}")
+                notas_taxa.append(resultado)
+                payload["messages"].append({"role": "tool", "tool_call_id": ch["id"],
+                                            "content": json.dumps(resultado, ensure_ascii=False)})
+        else:
+            payload.pop("tools", None)
+            r = await client.post("https://api.openai.com/v1/chat/completions", json=payload,
+                                  headers={"Authorization": f"Bearer {OPENAI_API_KEY}"}, timeout=30)
+            resposta = r.json()["choices"][0]["message"].get("content") or ""
 
     # Detecta pedido finalizado pelo bloco [RESUMO]...[/RESUMO]
     resumo = None
@@ -557,7 +662,8 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
 
     conversas[telefone].append({"role": "assistant", "content": resposta
         + ("\n(pedido registrado)" if resumo else "")
-        + ("".join(f"\n(foto enviada: {FOTOS[c]})" for c in fotos_pedidas))})
+        + ("".join(f"\n(foto enviada: {FOTOS[c]})" for c in fotos_pedidas))
+        + ("".join(f"\n(cálculo de entrega: {json.dumps(n, ensure_ascii=False)})" for n in notas_taxa))})
 
     if resumo:
         campos = {}
