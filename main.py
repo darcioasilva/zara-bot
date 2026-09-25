@@ -484,6 +484,24 @@ FOTOS_PENDENTES: dict[str, list] = {}
 ULTIMA_MSG: dict[str, datetime] = {}
 HORAS_NOVA_CONVERSA = 6
 
+def ler_ultima_msg(telefone: str):
+    """Horário da última mensagem do cliente (guardado no Supabase, sobrevive a deploys)."""
+    try:
+        res = supabase.table("ultima_mensagem").select("quando").eq("telefone", telefone).execute()
+        if res.data:
+            return datetime.fromisoformat(str(res.data[0]["quando"]).replace("Z", "+00:00"))
+    except Exception as e:
+        print(f"Erro ao ler última mensagem: {e}")
+    return ULTIMA_MSG.get(telefone)
+
+def gravar_ultima_msg(telefone: str, quando: datetime):
+    ULTIMA_MSG[telefone] = quando
+    try:
+        supabase.table("ultima_mensagem").upsert({"telefone": telefone, "quando": quando.isoformat()},
+                                                  on_conflict="telefone").execute()
+    except Exception as e:
+        print(f"Erro ao gravar última mensagem: {e}")
+
 def fotos_do_dia() -> list[str]:
     """Códigos das fotos dos pratos especiais válidos hoje (máx. 2)."""
     try:
@@ -766,9 +784,9 @@ async def receber_mensagem(request: Request):
 
         # Nova conversa? (primeira mensagem ou mais de 6h sem falar)
         agora = datetime.now(TZ)
-        ultima = ULTIMA_MSG.get(telefone)
+        ultima = ler_ultima_msg(telefone)
         nova_conversa = ultima is None or (agora - ultima).total_seconds() > HORAS_NOVA_CONVERSA * 3600
-        ULTIMA_MSG[telefone] = agora
+        gravar_ultima_msg(telefone, agora)
         if nova_conversa:
             conversas.pop(telefone, None)
 
