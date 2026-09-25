@@ -5,12 +5,26 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+import re
 from supabase import create_client
 
 app = FastAPI()
 
 # Fuso horário de Atibaia/SP (o servidor do Railway usa UTC)
 TZ = ZoneInfo("America/Sao_Paulo")
+
+# ─── Fotos dos pratos (pasta "fotos" no repositório) ─────────────
+URL_PUBLICA = os.environ.get("URL_PUBLICA", "https://web-production-069775.up.railway.app").rstrip("/")
+FOTOS: dict[str, str] = {}
+if os.path.isdir("fotos"):
+    app.mount("/fotos", StaticFiles(directory="fotos"), name="fotos")
+    try:
+        with open("fotos/fotos.json", encoding="utf-8") as f:
+            FOTOS = json.load(f)
+    except Exception as e:
+        print(f"Erro ao ler fotos.json: {e}")
+LISTA_FOTOS = "\n".join(f"{cod} = {nome}" for cod, nome in FOTOS.items())
 
 # ─── Configurações ────────────────────────────────────────────────
 WHATSAPP_TOKEN      = os.environ["WHATSAPP_TOKEN"]
@@ -273,12 +287,24 @@ ENDERECO: endereço completo (só para delivery; senão "-")
 OBS: observações extras (ou "-")
 [/RESUMO]
 
-   Sempre feche o bloco com [/RESUMO]. Nunca escreva nada depois de [/RESUMO]. Nunca inclua o
+7. FOTOS: você pode enviar foto de um prato colocando no FINAL da mensagem a marcação
+   [FOTO: código] usando os códigos da lista abaixo (ex.: [FOTO: 160]). O cliente não vê a
+   marcação, só recebe a foto. Envie foto quando o cliente pedir, quando perguntar qual é o
+   prato da semana/do dia (procure na lista o prato com nome igual ou mais parecido), ou quando
+   ele estiver em dúvida entre pratos. No máximo 2 fotos por mensagem e não repita foto já
+   enviada na conversa. Só use códigos que existem na lista; se o prato não tiver foto, não
+   invente e não comente que falta foto.
+
+   LISTA DE FOTOS DISPONÍVEIS (código = prato):
+{LISTA_FOTOS}
+
+8. Sobre o bloco [RESUMO]: sempre feche o bloco com [/RESUMO]. Nunca escreva nada depois de [/RESUMO]. Nunca inclua o
    bloco antes de o cliente confirmar, e nunca o inclua duas vezes para o mesmo pedido.
 """
 
 # ─── Histórico de conversas (em memória) ─────────────────────────
 conversas: dict[str, list] = {}
+FOTOS_PENDENTES: dict[str, list] = {}
 
 # ─── Buscar cliente no Supabase ──────────────────────────────────
 def buscar_cliente(telefone: str) -> dict | None:
@@ -360,6 +386,23 @@ async def enviar_mensagem(telefone: str, texto: str):
         if r.status_code != 200:
             print(f"Erro ao enviar mensagem: {r.text}")
 
+async def enviar_foto(telefone: str, codigo: str):
+    nome = FOTOS.get(codigo)
+    if not nome:
+        return
+    url = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}", "Content-Type": "application/json"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": telefone,
+        "type": "image",
+        "image": {"link": f"{URL_PUBLICA}/fotos/{codigo}.jpg", "caption": nome}
+    }
+    async with httpx.AsyncClient() as client:
+        r = await client.post(url, json=payload, headers=headers)
+        if r.status_code != 200:
+            print(f"Erro ao enviar foto {codigo}: {r.text}")
+
 # ─── Chamar ChatGPT ───────────────────────────────────────────────
 async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str) -> str:
     prato_semana = await buscar_prato_semana()
@@ -406,7 +449,14 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
             depois = "\n".join(linhas[corte + 1:])
         resposta = (resposta[:inicio].strip() + "\n\n" + depois.strip()).strip()
 
-    conversas[telefone].append({"role": "assistant", "content": resposta + ("\n(pedido registrado)" if resumo else "")})
+    # Extrai marcações [FOTO: código]
+    fotos_pedidas = [c for c in re.findall(r"\[FOTO:\s*(\d+)\s*\]", resposta) if c in FOTOS][:2]
+    resposta = re.sub(r"\[FOTO:[^\]]*\]", "", resposta).strip()
+    FOTOS_PENDENTES[telefone] = fotos_pedidas
+
+    conversas[telefone].append({"role": "assistant", "content": resposta
+        + ("\n(pedido registrado)" if resumo else "")
+        + ("".join(f"\n(foto enviada: {FOTOS[c]})" for c in fotos_pedidas))})
 
     if resumo:
         campos = {}
@@ -468,6 +518,8 @@ async def receber_mensagem(request: Request):
 
         resposta = await chamar_chatgpt(telefone, texto_recebido, nome_cliente)
         await enviar_mensagem(telefone, resposta)
+        for codigo in FOTOS_PENDENTES.pop(telefone, []):
+            await enviar_foto(telefone, codigo)
 
     except Exception as e:
         print(f"Erro no webhook: {e}")
