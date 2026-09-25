@@ -2,10 +2,14 @@ import os
 import json
 import httpx
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, Response
 from supabase import create_client
 
 app = FastAPI()
+
+# Fuso horário de Atibaia/SP (o servidor do Railway usa UTC)
+TZ = ZoneInfo("America/Sao_Paulo")
 
 # ─── Configurações ────────────────────────────────────────────────
 WHATSAPP_TOKEN      = os.environ["WHATSAPP_TOKEN"]
@@ -163,7 +167,7 @@ Lata 350ml: R$ 6,90 (Coca-Cola, Coca Zero, Guaraná Antártica, Sprite, Sprite Z
 # ─── Buscar prato da semana no Supabase ──────────────────────────
 async def buscar_prato_semana() -> str:
     try:
-        hoje = datetime.now().date()
+        hoje = datetime.now(TZ).date()
         res = supabase.table("cardapio_semana").select("*").lte("data_inicio", str(hoje)).gte("data_fim", str(hoje)).execute()
         if res.data:
             pratos = [f"- {p['nome']} — R$ {p['preco']:.2f}" for p in res.data]
@@ -177,7 +181,7 @@ HORARIO = "Segunda a Sábado, das 11h às 15h15."
 
 # ─── System prompt da Zara ────────────────────────────────────────
 def montar_system_prompt(nome_cliente: str, prato_semana: str) -> str:
-    agora = datetime.now()
+    agora = datetime.now(TZ)
     hora_atual = agora.strftime("%H:%M")
     dia_semana_num = agora.weekday()  # 0=segunda, 5=sábado, 6=domingo
     dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
@@ -268,7 +272,7 @@ def salvar_pedido(telefone: str, nome_cliente: str, historico: str):
             "telefone": telefone,
             "nome_cliente": nome_cliente,
             "pedido": historico,
-            "criado_em": datetime.now().isoformat(),
+            "criado_em": datetime.now(TZ).isoformat(),
             "status": "aguardando"
         }).execute()
     except Exception as e:
@@ -408,4 +412,4 @@ async def receber_mensagem(request: Request):
 # ─── Health check ─────────────────────────────────────────────────
 @app.get("/")
 async def health():
-    return {"status": "Zara online 🌍", "hora": datetime.now().strftime("%H:%M")}
+    return {"status": "Zara online 🌍", "hora": datetime.now(TZ).strftime("%H:%M")}
