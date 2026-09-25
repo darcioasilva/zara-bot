@@ -57,7 +57,10 @@ ATENÇÃO: vouchers (Alelo, Ticket, VR, Sodexo) NÃO são aceitos no delivery.
 # ─── Cardápio fixo ────────────────────────────────────────────────
 CARDAPIO_FIXO = """
 === REFEIÇÕES (Pratos) ===
-Todos acompanham arroz, feijão (exceto sábado), salada e opção de acompanhamento.
+Todos os pratos acompanham SOMENTE arroz, feijão (exceto sábado) e salada.
+Qualquer outro acompanhamento (batata frita, farofa, legumes, purê, ovo, creme de milho etc.)
+é cobrado à parte, pelo preço da porção (veja PORÇÕES). As versões "com espaguete" já têm
+preço próprio na lista.
 OBS: Aos SÁBADOS não servimos feijão nem porção de feijão.
 
 CARNES:
@@ -325,6 +328,9 @@ STATUS: {status_cozinha}{aviso_feijao}{aviso_feijoada}{aviso_esgotados}
    - Para SALÃO: horário de chegada. IMPORTANTE: o Afrika NÃO reserva mesa. Diga que o prato
      fica pronto no horário combinado — nunca fale em "mesa reservada".
    - Itens com todas as personalizações (molho à parte, sem cebola, sem salada, suco coado, etc.)
+   - NUNCA diga ou dê a entender que o cliente pode escolher um acompanhamento extra pelo mesmo
+     preço. Ao apresentar um prato, diga que acompanha arroz, feijão e salada. Se o cliente pedir
+     fritas, farofa ou outro acompanhamento, informe o preço da porção e some ao total.
 
 3. Antes de finalizar, SEMPRE confirme com o cliente o pedido completo com o preço de cada item
    e o TOTAL DOS ITENS (use os preços do cardápio). Para DELIVERY: NUNCA calcule nem chute a taxa
