@@ -199,7 +199,7 @@ async def buscar_prato_semana() -> str:
                          + (f" ({p['descricao']})" if p.get("descricao") else "")
                          + f" — R$ {float(p['preco']):.2f}".replace(".", ",")
                          + f" — válido de {ini:%d/%m} a {fim:%d/%m}"
-                         + (f" — foto: [FOTO: {p['foto_codigo']}]" if p.get("foto_codigo") else ""))
+                         + (f" — código da foto: {p['foto_codigo']}" if p.get("foto_codigo") else ""))
                 (hoje_l if ini <= hoje <= fim else prox_l).append(linha)
             texto = "PRATOS ESPECIAIS DISPONÍVEIS HOJE:\n" + ("\n".join(hoje_l) if hoje_l else "- nenhum hoje")
             if prox_l:
@@ -313,6 +313,8 @@ OBS: observações extras (ou "-")
    ele estiver em dúvida entre pratos. No máximo 2 fotos por mensagem e não repita foto já
    enviada na conversa. Só use códigos que existem na lista; se o prato não tiver foto, não
    invente e não comente que falta foto.
+   PROIBIDO escrever links, endereços de internet, markdown de imagem (como ![nome](link)) ou
+   frases como "aqui está a foto". A ÚNICA forma de enviar foto é a marcação [FOTO: código].
 
    LISTA DE FOTOS DISPONÍVEIS (código = prato):
 {LISTA_FOTOS}
@@ -470,7 +472,12 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
 
     # Extrai marcações [FOTO: código]
     fotos_pedidas = [c for c in re.findall(r"\[FOTO:\s*(\d+)\s*\]", resposta) if c in FOTOS][:2]
-    resposta = re.sub(r"\[FOTO:[^\]]*\]", "", resposta).strip()
+    resposta = re.sub(r"\[FOTO:[^\]]*\]", "", resposta)
+    # Remove links/imagens em markdown e frases de "aqui está a foto" que o modelo às vezes inventa
+    resposta = re.sub(r"!?\[[^\]]*\]\([^)]*\)", "", resposta)
+    resposta = re.sub(r"https?://\S+", "", resposta)
+    resposta = re.sub(r"(?im)^.*aqui (t[áa]|est[áa]) a foto.*$", "", resposta)
+    resposta = re.sub(r"\n{3,}", "\n\n", resposta).strip()
     FOTOS_PENDENTES[telefone] = fotos_pedidas
 
     conversas[telefone].append({"role": "assistant", "content": resposta
