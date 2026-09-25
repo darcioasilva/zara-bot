@@ -235,22 +235,43 @@ STATUS: {status_cozinha}{aviso_feijao}{aviso_feijoada}
    - Ligar: (11) 2427-3528
 
 2. Se o cliente escolher pedir pelo WhatsApp, colete:
-   - Tipo: DELIVERY, RETIRADA ou SALÃO (adiantado para comer no local)
-   - Para DELIVERY: endereço completo, forma de pagamento (lembrar que voucher não é aceito)
+   - Tipo: DELIVERY, RETIRADA ou SALÃO (pedido adiantado para comer no local)
+   - Nome do cliente (se ainda não souber)
+   - Para DELIVERY: endereço completo e forma de pagamento (lembrar que voucher não é aceito)
    - Para RETIRADA: horário que vai buscar
-   - Para SALÃO: horário de chegada e nome para a mesa
-   - Itens com todas as personalizações (molho à parte, sem cebola, suco coado, etc.)
-   - Sempre confirme o pedido completo antes de finalizar
+   - Para SALÃO: horário de chegada. IMPORTANTE: o Afrika NÃO reserva mesa. Diga que o prato
+     fica pronto no horário combinado — nunca fale em "mesa reservada".
+   - Itens com todas as personalizações (molho à parte, sem cebola, sem salada, suco coado, etc.)
 
-3. Se perceber que é fornecedor ou assunto comercial:
+3. Antes de finalizar, SEMPRE confirme com o cliente o pedido completo com o preço de cada item
+   e o TOTAL (use os preços do cardápio). Para delivery, informe que a taxa de entrega depende da
+   distância (tabela acima) e será confirmada pela equipe, a menos que o cliente informe o bairro
+   e a distância seja clara.
+
+4. Se perceber que é fornecedor ou assunto comercial:
    "Para assuntos com nosso setor de compras, o contato é {NUMERO_FORNECEDORES} 😊"
 
-4. Se o cliente pedir atendimento humano:
+5. Se o cliente pedir atendimento humano:
    "Claro! Pode ligar aqui mesmo pelo WhatsApp ou no (11) 2427-3528 que alguém te atende 😊"
 
-5. Registre TODAS as personalizações (molho à parte, suco coado, sem cebola, etc.)
+6. SOMENTE quando o cliente confirmar o pedido, responda com "Pedido anotado! Vou repassar para
+   a equipe agora 😊" e, NO FINAL da mesma mensagem, inclua EXATAMENTE este bloco (o cliente não
+   verá esse bloco, ele vai só para a cozinha):
 
-6. Ao finalizar um pedido, diga algo como "Pedido anotado! Vou repassar para a equipe agora 😊"
+[RESUMO]
+TIPO: SALÃO ou RETIRADA ou DELIVERY
+HORARIO: horário combinado (ou "o quanto antes")
+NOME: nome do cliente
+ITENS:
+1x Nome do Prato (personalizações) — R$ 00,00
+TOTAL: R$ 00,00
+PAGAMENTO: forma de pagamento (ou "no local")
+ENDERECO: endereço completo (só para delivery; senão "-")
+OBS: observações extras (ou "-")
+[/RESUMO]
+
+   Nunca inclua o bloco [RESUMO] antes de o cliente confirmar, e nunca o inclua duas vezes
+   para o mesmo pedido.
 """
 
 # ─── Histórico de conversas (em memória) ─────────────────────────
@@ -352,20 +373,29 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
         data = r.json()
         resposta = data["choices"][0]["message"]["content"]
 
-    conversas[telefone].append({"role": "assistant", "content": resposta})
+    # Detecta pedido finalizado pelo bloco [RESUMO]...[/RESUMO]
+    resumo = None
+    if "[RESUMO]" in resposta:
+        inicio = resposta.index("[RESUMO]")
+        fim = resposta.find("[/RESUMO]", inicio)
+        bloco = resposta[inicio + len("[RESUMO]"): fim if fim != -1 else len(resposta)]
+        resumo = bloco.strip()
+        resposta = (resposta[:inicio] + (resposta[fim + len("[/RESUMO]"):] if fim != -1 else "")).strip()
 
-    # Detecta pedido finalizado
-    palavras_pedido = ["pedido anotado", "vou repassar", "repassar para a equipe", "anotei seu pedido"]
-    if any(p in resposta.lower() for p in palavras_pedido):
-        historico_texto = "\n".join([
-            f"{'Cliente' if m['role'] == 'user' else 'Zara'}: {m['content']}"
-            for m in conversas[telefone][-12:]
-        ])
-        await notificar_equipe(
-            f"Cliente: {nome_cliente or 'Não identificado'}\nTelefone: {telefone}\n\n{historico_texto}",
-            titulo=f"🍽️ Pedido de {nome_cliente or telefone}"
-        )
-        salvar_pedido(telefone, nome_cliente or "", historico_texto)
+    conversas[telefone].append({"role": "assistant", "content": resposta + ("\n(pedido registrado)" if resumo else "")})
+
+    if resumo:
+        campos = {}
+        for linha in resumo.splitlines():
+            if ":" in linha:
+                chave, valor = linha.split(":", 1)
+                campos[chave.strip().upper()] = valor.strip()
+        tipo    = campos.get("TIPO", "PEDIDO")
+        horario = campos.get("HORARIO", "")
+        nome    = campos.get("NOME") or nome_cliente or telefone
+        titulo  = f"🍽️ {tipo} — {horario} — {nome}"
+        await notificar_equipe(f"{resumo}\n\nTelefone: {telefone}", titulo=titulo)
+        salvar_pedido(telefone, nome, resumo)
 
     return resposta
 
