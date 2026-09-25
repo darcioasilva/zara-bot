@@ -4,3 +4,4 @@ supabase>=2.10
 python-dotenv
 uvicorn[standard]
 fastapi
+tzdata
