@@ -181,12 +181,31 @@ Lata 350ml: R$ 6,90 (Coca-Cola, Coca Zero, Guaraná Antártica, Sprite, Sprite Z
 
 # ─── Buscar prato da semana no Supabase ──────────────────────────
 async def buscar_prato_semana() -> str:
+    """Pratos da semana (seg-sex) e cardápio de sexta/sábado, de hoje até os próximos 7 dias."""
     try:
+        from datetime import timedelta
         hoje = datetime.now(TZ).date()
-        res = supabase.table("cardapio_semana").select("*").lte("data_inicio", str(hoje)).gte("data_fim", str(hoje)).execute()
+        limite = hoje + timedelta(days=7)
+        res = (supabase.table("cardapio_semana").select("*")
+               .gte("data_fim", str(hoje)).lte("data_inicio", str(limite))
+               .order("data_inicio").execute())
         if res.data:
-            pratos = [f"- {p['nome']} — R$ {p['preco']:.2f}" for p in res.data]
-            return "PRATO(S) DA SEMANA:\n" + "\n".join(pratos)
+            hoje_l, prox_l = [], []
+            for p in res.data:
+                ini = datetime.fromisoformat(str(p["data_inicio"])).date()
+                fim = datetime.fromisoformat(str(p["data_fim"])).date()
+                rotulo = "Cardápio de SEXTA/SÁBADO" if p.get("tipo") == "sexta_sabado" else "Prato da semana"
+                linha = (f"- [{rotulo}] {p['nome']}"
+                         + (f" ({p['descricao']})" if p.get("descricao") else "")
+                         + f" — R$ {float(p['preco']):.2f}".replace(".", ",")
+                         + f" — válido de {ini:%d/%m} a {fim:%d/%m}"
+                         + (f" — foto: [FOTO: {p['foto_codigo']}]" if p.get("foto_codigo") else ""))
+                (hoje_l if ini <= hoje <= fim else prox_l).append(linha)
+            texto = "PRATOS ESPECIAIS DISPONÍVEIS HOJE:\n" + ("\n".join(hoje_l) if hoje_l else "- nenhum hoje")
+            if prox_l:
+                texto += ("\n\nPRÓXIMOS PRATOS ESPECIAIS (só aceite pedido para as datas indicadas):\n"
+                          + "\n".join(prox_l))
+            return texto
     except Exception as e:
         print(f"Erro ao buscar prato da semana: {e}")
     return "PRATO DA SEMANA: Consulte com a equipe pelo número (11) 2427-3528"
