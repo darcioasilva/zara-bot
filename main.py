@@ -35,6 +35,8 @@ SUPABASE_URL        = os.environ["SUPABASE_URL"]
 SUPABASE_KEY        = os.environ["SUPABASE_KEY"]
 NTFY_TOPIC          = os.environ["NTFY_TOPIC"]
 NUMERO_FORNECEDORES = os.environ["NUMERO_FORNECEDORES"]
+# Números autorizados a mandar comandos (#acabou, #voltou, #esgotados), separados por vírgula
+ADMIN_NUMEROS = {normal for normal in ("".join(c for c in n if c.isdigit()) for n in os.environ.get("ADMIN_NUMEROS", "").split(",")) if normal}
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -210,11 +212,51 @@ async def buscar_prato_semana() -> str:
         print(f"Erro ao buscar prato da semana: {e}")
     return "PRATO DA SEMANA: Consulte com a equipe pelo número (11) 2427-3528"
 
+# ─── Itens esgotados no dia ───────────────────────────────────────
+def listar_esgotados() -> list[str]:
+    try:
+        hoje = str(datetime.now(TZ).date())
+        res = supabase.table("esgotados").select("item").eq("data", hoje).execute()
+        return [r["item"] for r in (res.data or [])]
+    except Exception as e:
+        print(f"Erro ao listar esgotados: {e}")
+        return []
+
+def eh_admin(telefone: str) -> bool:
+    t = telefone[2:] if telefone.startswith("55") else telefone
+    return any(a == telefone or a == t or a[2:] == t for a in ADMIN_NUMEROS)
+
+async def tratar_comando(telefone: str, texto: str) -> str:
+    """Comandos da equipe: #acabou <item>, #voltou <item>, #esgotados"""
+    hoje = str(datetime.now(TZ).date())
+    partes = texto.strip()[1:].split(None, 1)
+    cmd = partes[0].lower() if partes else ""
+    item = partes[1].strip() if len(partes) > 1 else ""
+    try:
+        if cmd in ("acabou", "esgotou") and item:
+            supabase.table("esgotados").insert({"item": item, "data": hoje, "criado_por": telefone}).execute()
+            return f"✅ Anotado: *{item}* esgotado hoje. A Zara não vai mais oferecer."
+        if cmd in ("voltou", "tem") and item:
+            atuais = supabase.table("esgotados").select("id,item").eq("data", hoje).execute().data or []
+            removidos = [r for r in atuais if item.lower() in r["item"].lower() or r["item"].lower() in item.lower()]
+            for r in removidos:
+                supabase.table("esgotados").delete().eq("id", r["id"]).execute()
+            if removidos:
+                return "✅ Voltou ao cardápio: " + ", ".join(r["item"] for r in removidos)
+            return f"Não encontrei *{item}* na lista de esgotados de hoje."
+        if cmd in ("esgotados", "lista"):
+            lista = listar_esgotados()
+            return ("Esgotados hoje: " + ", ".join(lista)) if lista else "Nada esgotado hoje. 👍"
+    except Exception as e:
+        print(f"Erro no comando: {e}")
+        return "Deu erro ao registrar o comando. Tente de novo."
+    return "Comandos: #acabou <item> · #voltou <item> · #esgotados"
+
 # ─── Horário de funcionamento ─────────────────────────────────────
 HORARIO = "Segunda a Sábado, das 11h às 15h15."
 
 # ─── System prompt da Zara ────────────────────────────────────────
-def montar_system_prompt(nome_cliente: str, prato_semana: str) -> str:
+def montar_system_prompt(nome_cliente: str, prato_semana: str, endereco: str = "") -> str:
     agora = datetime.now(TZ)
     hora_atual = agora.strftime("%H:%M")
     dia_semana_num = agora.weekday()  # 0=segunda, 5=sábado, 6=domingo
@@ -244,6 +286,12 @@ def montar_system_prompt(nome_cliente: str, prato_semana: str) -> str:
     if not (eh_quarta or eh_sabado):
         aviso_feijoada = "\n⚠️ FEIJOADA: Hoje NÃO temos feijoada. Disponível apenas às quartas e sábados."
 
+    esgotados = listar_esgotados()
+    aviso_esgotados = ""
+    if esgotados:
+        aviso_esgotados = ("\n⚠️ ESGOTADOS HOJE (não ofereça, não aceite pedido e não mande foto; se o cliente pedir, "
+                           "diga com gentileza que acabou hoje e sugira outra opção): " + ", ".join(esgotados))
+
     return f"""Você é Zara, atendente do Afrika Restaurante em Atibaia-SP.
 Seu atendimento deve ser caloroso, natural e parecer humano — use linguagem descontraída,
 pode usar "tá", "ótimo", "perfeito", emojis com moderação. Nunca diga que é um robô ou IA.
@@ -251,8 +299,9 @@ Se alguém perguntar diretamente se você é humano ou IA, diga que é a atenden
 
 CLIENTE: {nome_cliente if nome_cliente else "cliente"}
 {("CLIENTE JÁ CADASTRADO: o nome dele é " + nome_cliente + ". Cumprimente pelo nome e NUNCA pergunte o nome.") if nome_cliente else "Cliente novo: pergunte o nome antes de fechar o pedido."}
+{("ENDEREÇO CADASTRADO: " + endereco + ". Em pedido de DELIVERY, NÃO peça o endereço de novo: pergunte se é para entregar nesse endereço. Não fale o endereço antes de o cliente escolher delivery.") if endereco else ""}
 HOJE: {dia_semana}, {hora_atual}
-STATUS: {status_cozinha}{aviso_feijao}{aviso_feijoada}
+STATUS: {status_cozinha}{aviso_feijao}{aviso_feijoada}{aviso_esgotados}
 
 === CARDÁPIO ===
 {prato_semana}
@@ -333,9 +382,12 @@ def fotos_do_dia() -> list[str]:
     """Códigos das fotos dos pratos especiais válidos hoje (máx. 2)."""
     try:
         hoje = str(datetime.now(TZ).date())
-        res = (supabase.table("cardapio_semana").select("foto_codigo,tipo")
+        res = (supabase.table("cardapio_semana").select("foto_codigo,tipo,nome")
                .lte("data_inicio", hoje).gte("data_fim", hoje).order("tipo").execute())
-        return [p["foto_codigo"] for p in (res.data or []) if p.get("foto_codigo") in FOTOS][:2]
+        esg = [e.lower() for e in listar_esgotados()]
+        return [p["foto_codigo"] for p in (res.data or [])
+                if p.get("foto_codigo") in FOTOS
+                and not any(e in p["nome"].lower() or p["nome"].lower() in e for e in esg)][:2]
     except Exception as e:
         print(f"Erro ao buscar fotos do dia: {e}")
         return []
@@ -438,7 +490,7 @@ async def enviar_foto(telefone: str, codigo: str):
             print(f"Erro ao enviar foto {codigo}: {r.text}")
 
 # ─── Chamar ChatGPT ───────────────────────────────────────────────
-async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str) -> str:
+async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str, endereco: str = "") -> str:
     prato_semana = await buscar_prato_semana()
 
     if telefone not in conversas:
@@ -450,7 +502,7 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
     payload = {
         "model": "gpt-4o-mini",
         "messages": [
-            {"role": "system", "content": montar_system_prompt(nome_cliente, prato_semana)},
+            {"role": "system", "content": montar_system_prompt(nome_cliente, prato_semana, endereco)},
             *historico
         ],
         "temperature": 0.7,
@@ -552,8 +604,17 @@ async def receber_mensagem(request: Request):
             return {"status": "ok"}
 
         texto_recebido = msg["text"]["body"]
+
+        # Comandos da equipe (ex.: #acabou mignon)
+        if texto_recebido.strip().startswith("#") and eh_admin(telefone):
+            await enviar_mensagem(telefone, await tratar_comando(telefone, texto_recebido))
+            return {"status": "ok"}
         cliente = buscar_cliente(telefone)
         nome_cliente = cliente["nome"] if cliente else ""
+        endereco = ""
+        if cliente and cliente.get("endereco"):
+            endereco = cliente["endereco"] + (f" - {cliente['bairro']}" if cliente.get("bairro") else "") \
+                       + (f" (ref.: {cliente['referencia']})" if cliente.get("referencia") else "")
 
         # Nova conversa? (primeira mensagem ou mais de 6h sem falar)
         agora = datetime.now(TZ)
@@ -563,7 +624,7 @@ async def receber_mensagem(request: Request):
         if nova_conversa:
             conversas.pop(telefone, None)
 
-        resposta = await chamar_chatgpt(telefone, texto_recebido, nome_cliente)
+        resposta = await chamar_chatgpt(telefone, texto_recebido, nome_cliente, endereco)
         await enviar_mensagem(telefone, resposta)
 
         fotos = FOTOS_PENDENTES.pop(telefone, [])
