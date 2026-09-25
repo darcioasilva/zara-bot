@@ -290,6 +290,20 @@ def buscar_cliente(telefone: str) -> dict | None:
         print(f"Erro ao buscar cliente: {e}")
     return None
 
+def salvar_cliente(telefone: str, nome: str):
+    """Grava ou atualiza o cliente (celular + nome) para a Zara reconhecer na próxima vez."""
+    if not nome or nome == telefone:
+        return
+    try:
+        numero_limpo = telefone.replace("55", "", 1) if telefone.startswith("55") else telefone
+        supabase.table("clientes").upsert({
+            "celular": numero_limpo,
+            "nome": nome,
+            "atualizado_em": datetime.now(TZ).isoformat()
+        }, on_conflict="celular").execute()
+    except Exception as e:
+        print(f"Erro ao salvar cliente: {e}")
+
 def salvar_pedido(telefone: str, nome_cliente: str, historico: str):
     try:
         supabase.table("pedidos_whatsapp").insert({
@@ -405,6 +419,7 @@ async def chamar_chatgpt(telefone: str, mensagem_usuario: str, nome_cliente: str
         titulo  = f"🍽️ {tipo} — {horario} — {nome}"
         await notificar_equipe(f"{resumo}\n\nTelefone: {telefone}", titulo=titulo)
         salvar_pedido(telefone, nome, resumo)
+        salvar_cliente(telefone, nome)
 
     return resposta
 
