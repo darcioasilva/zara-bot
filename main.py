@@ -4,7 +4,7 @@ import httpx
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import re
 from supabase import create_client
@@ -530,7 +530,7 @@ async def notificar_equipe(mensagem: str, titulo: str = "🍽️ Novo Pedido - A
                 content=mensagem.encode("utf-8"),
                 headers={
                     "Title": titulo.encode("utf-8"),
-                    "Priority": "high",
+                    "Priority": "urgent",
                     "Tags": "fork_and_knife"
                 }
             )
@@ -810,3 +810,101 @@ mensagens, entrando em contato pelo telefone ou WhatsApp (11) 2427-3528.</p>
 @app.get("/privacidade", response_class=HTMLResponse)
 async def privacidade():
     return POLITICA_PRIVACIDADE
+
+
+# ─── Painel de pedidos para o computador (alarme até confirmar) ───
+PAINEL_CHAVE = os.environ.get("PAINEL_CHAVE", "")
+
+def _chave_ok(chave: str) -> bool:
+    return bool(PAINEL_CHAVE) and chave == PAINEL_CHAVE
+
+@app.get("/painel/pedidos")
+async def painel_pedidos(chave: str = ""):
+    if not _chave_ok(chave):
+        return JSONResponse({"erro": "chave inválida"}, status_code=403)
+    try:
+        desde = (datetime.now(TZ).replace(hour=0, minute=0, second=0, microsecond=0)).isoformat()
+        res = (supabase.table("pedidos_whatsapp").select("id,nome_cliente,telefone,pedido,criado_em,status")
+               .gte("criado_em", desde).order("criado_em", desc=True).limit(30).execute())
+        return {"pedidos": res.data or []}
+    except Exception as e:
+        print(f"Erro no painel: {e}")
+        return JSONResponse({"erro": str(e)}, status_code=500)
+
+@app.post("/painel/recebido/{pedido_id}")
+async def painel_recebido(pedido_id: str, chave: str = ""):
+    if not _chave_ok(chave):
+        return JSONResponse({"erro": "chave inválida"}, status_code=403)
+    supabase.table("pedidos_whatsapp").update({"status": "recebido"}).eq("id", pedido_id).execute()
+    return {"ok": True}
+
+PAINEL_HTML = """<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pedidos Zara — Afrika</title>
+<style>
+ body{margin:0;font-family:Arial,sans-serif;background:#1d1d1d;color:#eee}
+ header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;background:#2b2b2b}
+ h1{font-size:22px;margin:0}
+ #ativar{font-size:20px;padding:12px 22px;border:0;border-radius:8px;background:#e8a400;color:#000;cursor:pointer}
+ #status{font-size:14px;color:#aaa}
+ main{padding:16px;display:grid;gap:14px}
+ .card{background:#2e2e2e;border-radius:10px;padding:16px;border-left:10px solid #555}
+ .novo{border-left-color:#ff3b30;animation:pisca 1s infinite}
+ @keyframes pisca{50%{background:#5a1a17}}
+ .titulo{font-size:24px;font-weight:bold;margin-bottom:8px}
+ pre{white-space:pre-wrap;font-size:20px;margin:0 0 12px;font-family:inherit}
+ .ok{font-size:22px;padding:12px 26px;border:0;border-radius:8px;background:#34c759;color:#000;cursor:pointer}
+ .rec{opacity:.55}
+</style></head><body>
+<header><h1>🍽️ Pedidos da Zara</h1><span id="status">carregando…</span>
+<button id="ativar">🔔 Clique para ativar o som</button></header>
+<main id="lista"></main>
+<script>
+const CHAVE = new URLSearchParams(location.search).get("chave") || "";
+let ctx = null, alarme = null;
+document.getElementById("ativar").onclick = () => {
+  ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+  ctx.resume(); bip(); document.getElementById("ativar").textContent = "🔔 Som ativado";
+};
+function bip(){
+  if(!ctx) return;
+  [0,0.35,0.7].forEach(t=>{
+    const o=ctx.createOscillator(), g=ctx.createGain();
+    o.type="square"; o.frequency.value = t===0.35 ? 1320 : 880;
+    g.gain.setValueAtTime(0.9, ctx.currentTime+t); g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime+t+0.3);
+    o.connect(g).connect(ctx.destination); o.start(ctx.currentTime+t); o.stop(ctx.currentTime+t+0.3);
+  });
+}
+function tocar(liga){
+  if(liga && !alarme){ bip(); alarme=setInterval(bip, 2000); }
+  if(!liga && alarme){ clearInterval(alarme); alarme=null; }
+}
+function esc(t){return (t||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+async function receber(id){
+  await fetch(`/painel/recebido/${id}?chave=${encodeURIComponent(CHAVE)}`,{method:"POST"}); carregar();
+}
+async function carregar(){
+  try{
+    const r = await fetch(`/painel/pedidos?chave=${encodeURIComponent(CHAVE)}`);
+    const d = await r.json();
+    if(!r.ok){ document.getElementById("status").textContent = d.erro || "erro"; return; }
+    const pend = d.pedidos.filter(p=>p.status==="aguardando");
+    document.getElementById("lista").innerHTML = d.pedidos.map(p=>{
+      const hora = new Date(p.criado_em).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"});
+      const novo = p.status==="aguardando";
+      return `<div class="card ${novo?"novo":"rec"}"><div class="titulo">${hora} — ${esc(p.nome_cliente||p.telefone)}</div>
+        <pre>${esc(p.pedido)}\nTelefone: ${esc(p.telefone)}</pre>
+        ${novo?`<button class="ok" onclick="receber('${p.id}')">✅ Recebido</button>`:"<i>recebido</i>"}</div>`;
+    }).join("") || "<p>Nenhum pedido hoje ainda.</p>";
+    document.getElementById("status").textContent = `${pend.length} pendente(s) · atualizado ${new Date().toLocaleTimeString("pt-BR")}`;
+    tocar(pend.length>0);
+  }catch(e){ document.getElementById("status").textContent = "sem conexão — tentando de novo"; }
+}
+carregar(); setInterval(carregar, 10000);
+</script></body></html>"""
+
+@app.get("/painel", response_class=HTMLResponse)
+async def painel(chave: str = ""):
+    if not _chave_ok(chave):
+        return HTMLResponse("<h2>Acesso negado</h2>", status_code=403)
+    return PAINEL_HTML
