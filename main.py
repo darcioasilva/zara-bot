@@ -294,6 +294,15 @@ async def notificar_equipe(mensagem: str, titulo: str = "🍽️ Novo Pedido - A
     except Exception as e:
         print(f"Erro ao notificar: {e}")
 
+# ─── Corrigir 9º dígito de celulares brasileiros ─────────────────
+# A Meta às vezes entrega o número sem o 9 (ex.: 55 11 8765-4321).
+# Para responder, o número precisa estar com o 9 (55 11 98765-4321).
+def normalizar_telefone(telefone: str) -> str:
+    numero = "".join(c for c in telefone if c.isdigit())
+    if numero.startswith("55") and len(numero) == 12 and numero[4] in "6789":
+        numero = numero[:4] + "9" + numero[4:]
+    return numero
+
 # ─── Enviar mensagem WhatsApp ─────────────────────────────────────
 async def enviar_mensagem(telefone: str, texto: str):
     url = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_ID}/messages"
@@ -387,7 +396,7 @@ async def receber_mensagem(request: Request):
             return {"status": "ok"}
 
         msg      = mensagens[0]
-        telefone = msg["from"]
+        telefone = normalizar_telefone(msg["from"])
         tipo     = msg.get("type", "")
 
         if tipo != "text":
